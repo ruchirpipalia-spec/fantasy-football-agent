@@ -1,4 +1,0 @@
-fastmcp>=3.0
-nfl_data_py>=0.3
-pandas>=1.5
-requests>=2.31
