@@ -36,6 +36,15 @@ services:
       - key: UPSTASH_REDIS_REST_TOKEN
         sync: false
 
+      # Optional: enables get_draft_projections (real forward-looking
+      # projections, including rookies) instead of just get_draft_rankings
+      # (past-actual-production only). Free key, personal/non-commercial use
+      # — get one at https://www.fantasypros.com/api-data/. Leave unset and
+      # the tool just returns a clear "not configured" message instead of
+      # breaking anything else.
+      - key: FANTASYPROS_API_KEY
+        sync: false
+
     # Optional: MCP_AUTH_TOKEN is intentionally NOT set here. Adding it
     # requires your Claude account's "Add custom connector" dialog to have
     # the Request Headers option (currently a gradual-rollout beta) so
