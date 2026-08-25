@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: fantasy-football-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 servers/server.py
+    envVars:
+      # Switches the server from the local plugin's stdio mode into an
+      # actual web server Claude can reach as a remote/custom connector.
+      - key: MCP_TRANSPORT
+        value: http
+
+      # Render sets PORT automatically at runtime — servers/server.py reads
+      # it directly, nothing to fill in here.
+
+      # Required so the draft board actually persists. Render's free plan
+      # has an EPHEMERAL filesystem (wiped on every restart/spin-down), so
+      # writing the board to a local file here wouldn't survive — a free
+      # Upstash Redis database (also $0, no card) is used instead. Create
+      # one at https://console.upstash.com (Redis > Create Database) and
+      # paste its REST URL/token here. See deploy/README.md for the full
+      # walkthrough.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+
+    # Optional: MCP_AUTH_TOKEN is intentionally NOT set here. Adding it
+    # requires your Claude account's "Add custom connector" dialog to have
+    # the Request Headers option (currently a gradual-rollout beta) so
+    # Claude can actually send it back — if you add this env var without
+    # that option available, you'd lock yourself out with no way to
+    # authenticate. See deploy/README.md for how to check and add it
+    # safely after your first deploy, once you've confirmed it works.
