@@ -30,8 +30,10 @@ from football_data import (
     compute_league_fantasy_points,
     current_season,
     draft_board_exclusion_keys,
+    fantasypros_available,
     fetch_nfl_news_items,
     get_draft_board as fd_get_draft_board,
+    get_fantasypros_projections,
     get_id_crosswalk,
     get_league,
     get_seasonal_data_with_fallback,
@@ -72,7 +74,13 @@ mcp = FastMCP(
         "Tools for PPR fantasy football: historical weekly stats, matchup "
         "difficulty, recent news, waiver-wire trends, value-based draft "
         "rankings, a combined start/sit outlook, and league scoring "
-        "settings. Almost all data is live and free with no persistent "
+        "settings. get_draft_projections is also available when a free "
+        "FantasyPros key is configured (check its response for a "
+        "'not configured' error before assuming it's unavailable) — prefer "
+        "it over get_draft_rankings for draft prep, since it's a real "
+        "forward-looking projection that includes rookies and accounts for "
+        "offseason moves, rather than a ranking of last season's actual "
+        "production. Almost all data is live and free with no persistent "
         "state — the one exception is a local draft board: if the user "
         "says a player was drafted, taken, or is no longer available, call "
         "mark_player_drafted so get_draft_rankings stops suggesting them; "
@@ -486,6 +494,129 @@ def get_draft_rankings(scoring: str = "ppr", position: str | None = None, num_pl
     if was_fallback:
         result["fallback_note"] = (
             f"Requested season data wasn't available yet; using {season_used} instead."
+        )
+    return result
+
+
+@mcp.tool()
+def get_draft_projections(scoring: str = "ppr", position: str | None = None, num_players: int = 50, season: int | None = None, board: str | None = "default") -> dict:
+    """Forward-looking draft rankings from FantasyPros' real expert-consensus
+    projections — unlike get_draft_rankings (past-season actual production),
+    this includes rookies and accounts for offseason trades, coaching
+    changes, and depth-chart moves, since it's projecting the upcoming
+    season rather than summarizing a completed one.
+
+    Requires a free FANTASYPROS_API_KEY to be configured (personal,
+    non-commercial use — get one at https://www.fantasypros.com/api-data/).
+    If it's not set, this returns a clear error rather than guessing — fall
+    back to get_draft_rankings in that case, and say why (no key configured)
+    rather than silently substituting one tool for the other.
+
+    Excludes players marked drafted on `board`, matched by player name —
+    FantasyPros doesn't share nflverse's player IDs, so this exclusion can
+    occasionally miss a player if the two sources spell a name differently
+    (e.g. suffixes, initials, accented characters).
+
+    Args:
+        scoring: "ppr" (default), "standard", or "half".
+        position: Optional filter, e.g. "RB", "WR", "QB", "TE".
+        num_players: Max number of players to return.
+        season: Season to project for. Defaults to the current season.
+        board: Draft board name to exclude players from (see
+            mark_player_drafted), matched by name. Defaults to "default".
+            Pass None to skip this exclusion entirely.
+    """
+    if not fantasypros_available():
+        return {
+            "error": (
+                "No FANTASYPROS_API_KEY configured, so real forward-looking "
+                "projections aren't available. Get a free key at "
+                "https://www.fantasypros.com/api-data/, set it as an "
+                "environment variable, and try again — or use "
+                "get_draft_rankings instead (ranks by actual prior-season "
+                "production; won't include rookies)."
+            )
+        }
+
+    season = season or current_season()
+    scoring_key = scoring.lower()
+    fp_scoring = {"ppr": "PPR", "standard": "STD", "half": "HALF"}.get(scoring_key, "PPR")
+    points_col = {"PPR": "points_ppr", "STD": "points", "HALF": "points_half"}[fp_scoring]
+
+    try:
+        df = get_fantasypros_projections(season, scoring=fp_scoring, week=0)
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    if df.empty:
+        return {"error": f"FantasyPros returned no {season} projections."}
+
+    if points_col not in df.columns or df[points_col].isna().all():
+        points_col = "points"  # best-effort fallback if a scoring variant is missing
+    df = df.dropna(subset=[points_col, "name", "position"])
+
+    # Same value-over-replacement approach as get_draft_rankings, for
+    # comparable output shape — just against projected points instead of
+    # actual points.
+    replacement_rank = {"QB": 12, "RB": 30, "WR": 36, "TE": 12, "K": 12, "DST": 12}
+    ranked_parts = []
+    for pos, rep_rank in replacement_rank.items():
+        pos_df = df[df["position"] == pos].sort_values(points_col, ascending=False).reset_index(drop=True)
+        if pos_df.empty:
+            continue
+        rep_idx = min(rep_rank, len(pos_df)) - 1
+        replacement_score = pos_df.loc[rep_idx, points_col]
+        pos_df = pos_df.copy()
+        pos_df["value_over_replacement"] = pos_df[points_col] - replacement_score
+        ranked_parts.append(pos_df)
+
+    if not ranked_parts:
+        return {"error": f"No usable {season} projections by position."}
+
+    all_ranked = pd.concat(ranked_parts).sort_values("value_over_replacement", ascending=False)
+    if position:
+        all_ranked = all_ranked[all_ranked["position"] == position.upper()]
+
+    excluded_count = 0
+    if board:
+        _, board_names = draft_board_exclusion_keys(board)
+        if board_names:
+            before = len(all_ranked)
+            all_ranked = all_ranked[~all_ranked["name"].isin(board_names)]
+            excluded_count = before - len(all_ranked)
+
+    all_ranked = all_ranked.head(num_players)
+
+    rankings = [
+        {
+            "name": r["name"],
+            "position": r["position"],
+            "team": r["team"],
+            f"projected_{scoring_key}_points_{season}": round(float(r[points_col]), 1),
+            "value_over_replacement": round(float(r["value_over_replacement"]), 1),
+        }
+        for _, r in all_ranked.iterrows()
+    ]
+
+    result = {
+        "season": season,
+        "scoring": scoring_key,
+        "source": "FantasyPros expert-consensus projections",
+        "caveat": (
+            "Forward-looking projections, not past production — includes "
+            "rookies and accounts for offseason moves, unlike "
+            "get_draft_rankings. Still combine with search_recent_news for "
+            "anything that's broken after these projections were compiled."
+        ),
+        "rankings": rankings,
+        "fetched_at": now_utc_iso(),
+    }
+    if excluded_count:
+        result["excluded_count"] = excluded_count
+        result["exclusion_note"] = (
+            f"{excluded_count} otherwise-qualifying player(s) were left out "
+            f"because they're marked drafted on board '{board}' (matched by "
+            "name — see the name-matching caveat above)."
         )
     return result
 
