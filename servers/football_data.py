@@ -58,6 +58,17 @@ UPSTASH_REDIS_REST_URL = os.environ.get("UPSTASH_REDIS_REST_URL")
 UPSTASH_REDIS_REST_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
 UPSTASH_DRAFT_BOARD_KEY = "fantasy-football-agent:draft_boards"
 
+# Optional: real forward-looking projections (get_draft_projections), instead
+# of get_draft_rankings' past-actual-production-only view. Off by default —
+# nothing else in this plugin requires it. Get a free key (personal,
+# non-commercial use) at https://www.fantasypros.com/api-data/ and set it as
+# an environment variable to turn this on. Each person running their own
+# copy of this server should use their own key rather than sharing one,
+# both because FantasyPros' free tier is scoped to personal use and to
+# avoid everyone sharing one rate limit.
+FANTASYPROS_API_KEY = os.environ.get("FANTASYPROS_API_KEY")
+FANTASYPROS_BASE = "https://api.fantasypros.com/v2/json/nfl"
+
 
 # ---------------------------------------------------------------------------
 # Freshness helpers
@@ -709,6 +720,95 @@ def compute_league_fantasy_points(stat_row: dict, scoring_settings: dict) -> flo
         points_per_unit = scoring_settings.get(sleeper_key, 0) or 0
         total += value * points_per_unit
     return round(total, 2)
+
+
+# ---------------------------------------------------------------------------
+# FantasyPros projections (optional — requires FANTASYPROS_API_KEY)
+# ---------------------------------------------------------------------------
+#
+# Unlike everything above, these are forward-looking: FantasyPros aggregates
+# real analyst projections, which is the only way this plugin can say
+# anything useful about a rookie (nflverse/Sleeper only have stats for games
+# that already happened, so a rookie with zero NFL games has nothing to
+# compute from). This is intentionally kept separate from the nflverse/
+# Sleeper-backed tools above — if no key is configured, callers should get a
+# clear "not configured" error, not a crash, and can fall back to
+# get_draft_rankings.
+
+def fantasypros_available() -> bool:
+    return bool(FANTASYPROS_API_KEY)
+
+
+@lru_cache(maxsize=8)
+def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0) -> pd.DataFrame:
+    """All-position FantasyPros projections for one season/week, normalized
+    into a flat DataFrame (name/position/team/points columns).
+
+    week=0 is FantasyPros' convention for preseason/full-season projections
+    (what draft-time rankings want); pass a specific week for in-season
+    weekly projections instead.
+
+    Cached per (season, scoring, week) for this process's lifetime —
+    projections don't meaningfully change second-to-second, so there's no
+    reason to re-hit the API (and its rate limit) on every call within one
+    session, same reasoning as the nflverse caching above.
+
+    Raises RuntimeError (not a crash) if no key is configured or the request
+    fails, so callers can present a clean error/fallback instead.
+    """
+    if not FANTASYPROS_API_KEY:
+        raise RuntimeError(
+            "FANTASYPROS_API_KEY is not set — get a free key at "
+            "https://www.fantasypros.com/api-data/ and set it as an "
+            "environment variable to enable real season projections."
+        )
+
+    url = f"{FANTASYPROS_BASE}/{season}/projections"
+    params = {
+        "season": season,
+        "week": week,
+        "scoring": scoring,
+        "positions": "QB:RB:WR:TE:K:DST",
+    }
+    try:
+        resp = requests.get(
+            url,
+            headers={"x-api-key": FANTASYPROS_API_KEY},
+            params=params,
+            timeout=REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "?"
+        raise RuntimeError(
+            f"FantasyPros API returned HTTP {status} — check that "
+            "FANTASYPROS_API_KEY is valid and hasn't hit its rate limit."
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Could not reach FantasyPros API: {exc}") from exc
+
+    players = data.get("players")
+    if players is None:
+        raise RuntimeError(
+            "FantasyPros API response didn't include a 'players' list — "
+            "the API format may have changed since this was written."
+        )
+
+    rows = []
+    for p in players:
+        stats = p.get("stats") or {}
+        rows.append(
+            {
+                "name": p.get("name"),
+                "position": p.get("position_id"),
+                "team": p.get("team_id"),
+                "points": stats.get("points"),
+                "points_ppr": stats.get("points_ppr"),
+                "points_half": stats.get("points_half"),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
