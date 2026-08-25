@@ -6,6 +6,16 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python3 servers/server.py
     envVars:
+      # Pins the Python version explicitly. Without this, Render uses
+      # whatever its current default is, and data-science packages like
+      # nfl_data_py/pandas/numpy sometimes don't have a prebuilt wheel yet
+      # for a very new Python release — pip then tries to build from
+      # source and fails with "exited with status 1" on Render's minimal
+      # build image. 3.11 is a well-supported version for this whole
+      # dependency stack.
+      - key: PYTHON_VERSION
+        value: 3.11.9
+
       # Switches the server from the local plugin's stdio mode into an
       # actual web server Claude can reach as a remote/custom connector.
       - key: MCP_TRANSPORT
