@@ -745,7 +745,15 @@ def fantasypros_available() -> bool:
     return bool(FANTASYPROS_API_KEY)
 
 
-@lru_cache(maxsize=8)
+# FantasyPros' own docs example for this endpoint is
+# "GET .../nfl/2026/projections?position=WR" — a single real position value,
+# not "ALL" or a colon-delimited list (both of those were guesses against an
+# unofficial client's enum, and evidently wrong: they returned zero players
+# with no error). One call per real position, confirmed against the docs, is
+# more requests but is what's actually documented to work.
+_FANTASYPROS_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"]
+
+
 def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0) -> pd.DataFrame:
     """All-position FantasyPros projections for one season/week, normalized
     into a flat DataFrame (name/position/team/points columns).
@@ -754,10 +762,38 @@ def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0
     (what draft-time rankings want); pass a specific week for in-season
     weekly projections instead.
 
-    Cached per (season, scoring, week) for this process's lifetime —
-    projections don't meaningfully change second-to-second, so there's no
-    reason to re-hit the API (and its rate limit) on every call within one
-    session, same reasoning as the nflverse caching above.
+    Makes one request per position in _FANTASYPROS_POSITIONS (each cached
+    individually — see _fetch_fantasypros_projections_for_position) and
+    concatenates the results. If every position fails, raises RuntimeError
+    with the first underlying error; if only some fail, returns what
+    succeeded rather than losing everything to one bad position.
+    """
+    frames = []
+    first_error = None
+    for position in _FANTASYPROS_POSITIONS:
+        try:
+            frames.append(_fetch_fantasypros_projections_for_position(season, position, scoring, week))
+        except RuntimeError as exc:
+            if first_error is None:
+                first_error = str(exc)
+
+    if not frames:
+        raise RuntimeError(
+            "FantasyPros projections failed for every position. First "
+            f"error: {first_error}"
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
+@lru_cache(maxsize=64)
+def _fetch_fantasypros_projections_for_position(season: int, position: str, scoring: str = "PPR", week: int = 0) -> pd.DataFrame:
+    """Projections for ONE position (FantasyPros requires "position" to be a
+    real value like "WR", not "ALL" — see get_fantasypros_projections).
+
+    Cached per (season, position, scoring, week) for this process's
+    lifetime — projections don't meaningfully change second-to-second, so
+    there's no reason to re-hit the API (and its rate limit) on every call
+    within one session, same reasoning as the nflverse caching above.
 
     Raises RuntimeError (not a crash) if no key is configured or the request
     fails, so callers can present a clean error/fallback instead.
@@ -774,14 +810,7 @@ def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0
         "season": season,
         "week": week,
         "scoring": scoring,
-        # "position" (singular) is REQUIRED by this endpoint — confirmed
-        # against FantasyPros' real open-source client, which always sends
-        # it. Without it, the API doesn't error; it just silently returns
-        # zero players, which looks identical to "no projections exist yet"
-        # but isn't. "ALL" plus the "positions" narrowing below is how that
-        # client gets every fantasy-relevant position back in one call.
-        "position": "ALL",
-        "positions": "QB:RB:WR:TE:K:DST",
+        "position": position,
     }
     try:
         resp = requests.get(
@@ -808,19 +837,20 @@ def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0
         if exc.response is not None:
             body = exc.response.text[:300].strip()
         raise RuntimeError(
-            f"FantasyPros API returned HTTP {status}"
+            f"FantasyPros API returned HTTP {status} for position={position}"
             + (f" — response body: {body}" if body else "")
             + ". Check that FANTASYPROS_API_KEY is valid, active, and "
             "hasn't hit its rate limit."
         ) from exc
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Could not reach FantasyPros API: {exc}") from exc
+        raise RuntimeError(f"Could not reach FantasyPros API for position={position}: {exc}") from exc
 
     players = data.get("players")
     if players is None:
         raise RuntimeError(
-            "FantasyPros API response didn't include a 'players' list — "
-            "the API format may have changed since this was written."
+            f"FantasyPros API response for position={position} didn't "
+            "include a 'players' list — the API format may have changed "
+            "since this was written."
         )
 
     if not players:
@@ -830,10 +860,9 @@ def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0
         # matching players existing but being withheld (a plan/tier cap,
         # most likely surfaced via `limits`).
         raise RuntimeError(
-            "FantasyPros API returned zero players for this query, even "
-            "though the request succeeded. Diagnostic info from the "
-            f"response — count: {data.get('count')!r}, positions echoed "
-            f"back: {data.get('positions')!r}, scoring: "
+            f"FantasyPros API returned zero players for position={position}, "
+            "even though the request succeeded. Diagnostic info from the "
+            f"response — count: {data.get('count')!r}, scoring: "
             f"{data.get('scoring')!r}, limits: {data.get('limits')!r}, "
             f"full top-level keys: {sorted(data.keys())!r}."
         )
