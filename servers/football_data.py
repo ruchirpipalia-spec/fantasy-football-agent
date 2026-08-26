@@ -773,7 +773,17 @@ def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0
     try:
         resp = requests.get(
             url,
-            headers={"x-api-key": FANTASYPROS_API_KEY},
+            headers={
+                "x-api-key": FANTASYPROS_API_KEY,
+                # Without an explicit User-Agent, `requests` sends its own
+                # default ("python-requests/x.y"), which is a widely
+                # blocklisted signature on bot-protection/WAF layers (a
+                # bare '{"message":"Forbidden"}' with no other detail, as
+                # seen from this API, is the classic fingerprint of that
+                # kind of block rather than an actual invalid-key error).
+                "User-Agent": "fantasy-football-agent/0.1 (+https://github.com/)",
+                "Accept": "application/json",
+            },
             params=params,
             timeout=REQUEST_TIMEOUT,
         )
