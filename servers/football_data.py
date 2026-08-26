@@ -67,7 +67,13 @@ UPSTASH_DRAFT_BOARD_KEY = "fantasy-football-agent:draft_boards"
 # both because FantasyPros' free tier is scoped to personal use and to
 # avoid everyone sharing one rate limit.
 FANTASYPROS_API_KEY = os.environ.get("FANTASYPROS_API_KEY")
-FANTASYPROS_BASE = "https://api.fantasypros.com/v2/json/nfl"
+# NOTE: the path really does include "/public/" — easy to miss (it's absent
+# from the hosted docs page at api.fantasypros.com/v2/docs), but confirmed
+# against FantasyPros' own actively-maintained open-source PHP client
+# (github.com/FantasyPHP/fantasypros), which hits this exact base URL.
+# Hitting the URL without "/public/" returns a generic 403 {"message":
+# "Forbidden"} that looks identical to an invalid-key error but isn't one.
+FANTASYPROS_BASE = "https://api.fantasypros.com/public/v2/json/nfl"
 
 
 # ---------------------------------------------------------------------------
