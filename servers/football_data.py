@@ -142,6 +142,21 @@ def current_season() -> int:
     return now.year - 1
 
 
+def projection_season() -> int:
+    """Best-guess season to project FORWARD to (draft prep, not stat lookups).
+
+    Unlike current_season() (which deliberately falls back to the last
+    COMPLETED season Mar-Aug, so backward-looking stat tools don't return an
+    empty season), forward-looking projections should always target the
+    season that hasn't been played yet. NFL seasons are named for the year
+    they start, so that's simply the calendar year in progress: e.g. in
+    Jan/Feb 2027 the 2026 season is still finishing up its playoffs, but the
+    season worth drafting/projecting for is 2027; from March through the
+    following Feb it's the same year. In short: always now.year.
+    """
+    return datetime.now(timezone.utc).year
+
+
 def parse_weeks(weeks: str | None) -> list[int] | None:
     """Parse a weeks argument like '1-5', '1,2,3', or '7' into a list of ints.
 
