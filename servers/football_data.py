@@ -774,6 +774,13 @@ def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0
         "season": season,
         "week": week,
         "scoring": scoring,
+        # "position" (singular) is REQUIRED by this endpoint — confirmed
+        # against FantasyPros' real open-source client, which always sends
+        # it. Without it, the API doesn't error; it just silently returns
+        # zero players, which looks identical to "no projections exist yet"
+        # but isn't. "ALL" plus the "positions" narrowing below is how that
+        # client gets every fantasy-relevant position back in one call.
+        "position": "ALL",
         "positions": "QB:RB:WR:TE:K:DST",
     }
     try:
