@@ -781,9 +781,14 @@ def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0
         data = resp.json()
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "?"
+        body = ""
+        if exc.response is not None:
+            body = exc.response.text[:300].strip()
         raise RuntimeError(
-            f"FantasyPros API returned HTTP {status} — check that "
-            "FANTASYPROS_API_KEY is valid and hasn't hit its rate limit."
+            f"FantasyPros API returned HTTP {status}"
+            + (f" — response body: {body}" if body else "")
+            + ". Check that FANTASYPROS_API_KEY is valid, active, and "
+            "hasn't hit its rate limit."
         ) from exc
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"Could not reach FantasyPros API: {exc}") from exc
