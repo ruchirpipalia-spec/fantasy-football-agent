@@ -44,6 +44,7 @@ from football_data import (
     normalize_stat_row,
     now_utc_iso,
     parse_weeks,
+    projection_season,
     recent_form_for,
     resolve_player,
     sleeper_get,
@@ -521,7 +522,10 @@ def get_draft_projections(scoring: str = "ppr", position: str | None = None, num
         scoring: "ppr" (default), "standard", or "half".
         position: Optional filter, e.g. "RB", "WR", "QB", "TE".
         num_players: Max number of players to return.
-        season: Season to project for. Defaults to the current season.
+        season: Season to project for. Defaults to the upcoming/current season
+            (unlike get_draft_rankings, this does NOT fall back to the last
+            completed season in the off-season — projections are meant to
+            look forward).
         board: Draft board name to exclude players from (see
             mark_player_drafted), matched by name. Defaults to "default".
             Pass None to skip this exclusion entirely.
@@ -538,7 +542,7 @@ def get_draft_projections(scoring: str = "ppr", position: str | None = None, num
             )
         }
 
-    season = season or current_season()
+    season = season or projection_season()
     scoring_key = scoring.lower()
     fp_scoring = {"ppr": "PPR", "standard": "STD", "half": "HALF"}.get(scoring_key, "PPR")
     points_col = {"PPR": "points_ppr", "STD": "points", "HALF": "points_half"}[fp_scoring]
@@ -560,10 +564,22 @@ def get_draft_projections(scoring: str = "ppr", position: str | None = None, num
     # actual points.
     replacement_rank = {"QB": 12, "RB": 30, "WR": 36, "TE": 12, "K": 12, "DST": 12}
     ranked_parts = []
+    capped_positions = []
     for pos, rep_rank in replacement_rank.items():
         pos_df = df[df["position"] == pos].sort_values(points_col, ascending=False).reset_index(drop=True)
         if pos_df.empty:
             continue
+        # FantasyPros' free tier appears to cap each position at ~10 players
+        # per request, well short of the replacement rank assumed above
+        # (e.g. 30 for RB, 36 for WR). When that happens, the pool itself
+        # is smaller than the intended replacement level, so the *last*
+        # available player becomes the de facto replacement — value_over_
+        # replacement is still correct for ordering WITHIN that position,
+        # but is not comparable across positions (a shallow-pool position's
+        # VORP looks inflated relative to one with a full pool). Flagged
+        # below so a combined/cross-position list isn't taken at face value.
+        if len(pos_df) < rep_rank:
+            capped_positions.append(pos)
         rep_idx = min(rep_rank, len(pos_df)) - 1
         replacement_score = pos_df.loc[rep_idx, points_col]
         pos_df = pos_df.copy()
@@ -617,6 +633,19 @@ def get_draft_projections(scoring: str = "ppr", position: str | None = None, num
             f"{excluded_count} otherwise-qualifying player(s) were left out "
             f"because they're marked drafted on board '{board}' (matched by "
             "name — see the name-matching caveat above)."
+        )
+    if capped_positions:
+        result["shallow_pool_positions"] = sorted(capped_positions)
+        result["shallow_pool_note"] = (
+            "FantasyPros' free tier returns only a limited number of players "
+            f"per position (looks like ~10). {', '.join(sorted(capped_positions))} "
+            "came back shallower than the replacement rank normally assumed "
+            "for value_over_replacement, so for these positions that field "
+            "is anchored to whatever the lowest-ranked player returned was — "
+            "still valid for ordering players WITHIN the position, but not "
+            "safe to compare against other positions in a combined/overall "
+            "list. Rank within each position separately rather than trusting "
+            "one merged top-N ordering across positions."
         )
     return result
 
