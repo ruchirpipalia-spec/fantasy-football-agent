@@ -823,6 +823,21 @@ def get_fantasypros_projections(season: int, scoring: str = "PPR", week: int = 0
             "the API format may have changed since this was written."
         )
 
+    if not players:
+        # Surface the envelope's own metadata rather than just saying
+        # "empty" — `count` tells us whether the API thinks any players
+        # match this query at all (0 = the filter itself is wrong) versus
+        # matching players existing but being withheld (a plan/tier cap,
+        # most likely surfaced via `limits`).
+        raise RuntimeError(
+            "FantasyPros API returned zero players for this query, even "
+            "though the request succeeded. Diagnostic info from the "
+            f"response — count: {data.get('count')!r}, positions echoed "
+            f"back: {data.get('positions')!r}, scoring: "
+            f"{data.get('scoring')!r}, limits: {data.get('limits')!r}, "
+            f"full top-level keys: {sorted(data.keys())!r}."
+        )
+
     rows = []
     for p in players:
         stats = p.get("stats") or {}
