@@ -217,7 +217,7 @@ Install the plugin — either way works, no separate setup step required:
   claude plugin install fantasy-football-agent@fantasy-football-agent-marketplace
   ```
 
-- **Cowork**: download the packaged .plugin file from this repo's Releases page and open/save it directly.
+- **Cowork**: download the packaged `.plugin` file from this repo's [Releases page](../../releases) and open/save it directly.
 
 The MCP server bootstraps its own Python dependencies
 (`fastmcp`, `nfl_data_py`, `pandas`, `requests`) the first time it
