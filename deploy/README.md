@@ -58,8 +58,23 @@ a repo you control.
    automatically — free plan, correct build/start commands.
 3. When prompted for environment variables, paste in the
    `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` from step 2.
+   Optionally, also paste in a `FANTASYPROS_API_KEY` (free, personal/
+   non-commercial tier — get one at
+   [fantasypros.com/api-data](https://www.fantasypros.com/api-data/)) to
+   turn on `get_draft_projections` (real forward-looking projections,
+   including rookies — see the main README for what that adds over the
+   default `get_draft_rankings`). Skip it and everything else still works
+   normally; that one tool just returns a "not configured" message.
 4. Deploy. Once it's live, your server's URL is
    `https://<your-service-name>.onrender.com`.
+
+**A build note worth knowing if you hit it**: Render's Python build
+environment can get cached across deploys. If a deploy fails on a fresh
+`render.yaml` change with something like `ModuleNotFoundError: No module
+named 'pkg_resources'`, that's usually Render still running an old cached
+Python version rather than picking up the `PYTHON_VERSION` pin — use
+**Manual Deploy > Clear build cache & deploy** once to force a truly
+fresh environment, rather than assuming the pin itself is wrong.
 
 **Free-tier cold starts**: after 15 minutes of no traffic, Render spins
 the service down; the next request wakes it back up, which takes roughly
@@ -111,3 +126,32 @@ lock it down:
 
 Both read and write the exact same tool logic in `servers/` — this
 isn't a fork, just a different way of running the same server.
+
+## Engineering notes: integrating a real third-party API
+
+The FantasyPros integration (`get_draft_projections`) went through a few
+rounds of real debugging worth documenting, in case this pattern is
+useful elsewhere or this integration ever needs revisiting:
+
+- **A generic `403 {"message":"Forbidden"}` isn't always what it looks
+  like.** It's the classic fingerprint of an AWS API Gateway rejection,
+  which reads identically whether the cause is an invalid key, a WAF
+  block, or (what it actually was here) a wrong base URL. The fix —
+  the base URL needs a `/public/` segment
+  (`api.fantasypros.com/public/v2/json`) that's easy to miss because it's
+  absent from FantasyPros' own hosted interactive docs page — was found
+  by reading FantasyPros' real open-source PHP client on GitHub rather
+  than trusting the docs page, and confirmed by the 403 disappearing.
+- **A 200 OK with zero results can still mean the request shape is
+  wrong**, not that the data doesn't exist. The `/projections` endpoint
+  requires `position` to be one real value (`WR`, `RB`, etc.) — not
+  `ALL` and not a list, both reasonable-looking guesses that returned
+  silently empty results with no error. Confirmed against FantasyPros'
+  own docs example and fixed by making one request per position instead
+  of trying to fetch every position in a single call.
+- **A free tier's limits aren't always documented up front.** FantasyPros
+  caps results at roughly 10 players per position per request on the
+  free plan — discovered empirically (asking for 60 consistently
+  returned exactly 10), not from any docs page, and now surfaced
+  explicitly in the tool's own response (`shallow_pool_note`) rather than
+  silently truncating.
