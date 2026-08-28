@@ -1,0 +1,17 @@
+{
+  "$schema": "https://code.claude.com/schema/marketplace.json",
+  "name": "fantasy-football-agent-marketplace",
+  "version": "1.0.0",
+  "description": "Marketplace for the fantasy-football-agent plugin — a PPR fantasy football assistant for Claude.",
+  "owner": {
+    "name": "Ruchir",
+    "url": "https://github.com/ruchirpipalia-spec/fantasy-football-agent"
+  },
+  "plugins": [
+    {
+      "name": "fantasy-football-agent",
+      "source": "./",
+      "description": "PPR fantasy football assistant — live stats, matchups, news, waiver-wire trends, and draft rankings/projections."
+    }
+  ]
+}
