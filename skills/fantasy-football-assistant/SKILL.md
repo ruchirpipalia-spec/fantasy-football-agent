@@ -10,7 +10,7 @@ description: >
   live stats, matchups, news, and waiver trends rather than relying on
   memorized player values.
 metadata:
-  version: "0.7.0"
+  version: "0.11.0"
 ---
 
 Use the `fantasy-football` MCP server's tools for any fantasy football
@@ -83,6 +83,18 @@ in either direction.
   that real Sleeper league. Also excludes anyone marked unavailable on the
   local `board` (see `mark_player_drafted` below) — pass `board=None` to
   skip that.
+- `get_draft_projections(scoring="ppr", position=None, num_players=50, season=None, board="default")`
+  — real forward-looking draft projections from FantasyPros' expert
+  consensus, for the upcoming season. Unlike `get_draft_rankings`, this
+  includes rookies and accounts for offseason trades/coaching changes.
+  Requires a free `FANTASYPROS_API_KEY` to be configured — if it's not,
+  this returns a clear `error` field saying so; fall back to
+  `get_draft_rankings` in that case and say why, rather than guessing.
+  Check the response for `shallow_pool_positions` /
+  `shallow_pool_note` — FantasyPros' free tier caps each position at
+  roughly 10 players per request, so `value_over_replacement` can be
+  compared within an affected position but not safely across positions
+  when this is present.
 - `mark_player_drafted(player_name, board="default", reason=None)` /
   `mark_player_available(player_name, board="default")` — remember (or
   forget) that a specific player is no longer available, so
@@ -115,21 +127,34 @@ about, even if internally it came from the play-by-play path.
 
 ## How to handle each type of request
 
-**Draft help / rankings**: Call `get_draft_rankings` with `scoring="ppr"`.
-Always relay the tool's caveat that this is prior-season production, not a
-forward projection — pair it with `search_recent_news` for any player whose
-situation may have changed (new team, injury, depth chart shift) before
-presenting a final recommendation. Explain *why* a player ranks where they
+**Draft help / rankings**: Try `get_draft_projections` first (real
+forward-looking data, includes rookies) — check its response for a "not
+configured" `error` before assuming it's unavailable, since a free
+FantasyPros key may or may not be set up. If it's not configured, fall
+back to `get_draft_rankings` with `scoring="ppr"` and say plainly why
+you're using the retrospective tool instead (no FantasyPros key
+configured), rather than silently switching. Whichever tool you use,
+relay its caveat honestly — `get_draft_rankings` is prior-season
+production, not a projection; `get_draft_projections` is a real
+projection but capped at roughly 10 players per position on the free
+tier (see `shallow_pool_note` when present) — and pair either with
+`search_recent_news` for any player whose situation may have changed
+(new team, injury, depth chart shift) before presenting a final
+recommendation. Explain *why* a player ranks where they
 do (position scarcity via value-over-replacement, usage trends), not just
 the number.
 
 **Rookies (any player with no prior NFL season) will never appear in
 `get_draft_rankings`** — it's built entirely from actual prior-season
 production, and a rookie has none yet by definition. This isn't a bug to
-route around silently: if the user asks about a specific rookie, or asks
-for a complete draft board, say plainly that rookies aren't covered by
-this ranking and offer `search_recent_news` instead for hype/context/depth
-chart signal on them, rather than just omitting them with no explanation.
+route around silently: if `get_draft_projections` isn't configured (no
+FantasyPros key) and the user asks about a specific rookie, or asks for a
+complete draft board, say plainly that rookies aren't covered by
+`get_draft_rankings` and offer `search_recent_news` instead for
+hype/context/depth chart signal on them, rather than just omitting them
+with no explanation. If `get_draft_projections` IS configured, use that
+instead for rookies — it's built from real projections, not prior
+production, so it covers them directly.
 `get_player_stats` and `get_start_sit_outlook` DO work for rookies once
 they've played real games — most rookies are already resolvable by name
 even before their first game, since roster/ID data updates well ahead of
