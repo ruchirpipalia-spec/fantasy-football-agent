@@ -29,7 +29,7 @@ lives only on your machine, not on any server.
 | Component | What it does |
 |---|---|
 | `fantasy-football-assistant` skill | Tells Claude when to reach for these tools and how to combine them into a recommendation |
-| `fantasy-football` MCP server | Exposes 10 tools: `get_player_stats`, `get_matchup_difficulty`, `search_recent_news`, `get_waiver_wire_available`, `get_draft_rankings`, `mark_player_drafted`, `mark_player_available`, `get_draft_board`, `get_start_sit_outlook`, `get_league_scoring_settings` |
+| `fantasy-football` MCP server | Exposes 11 tools: `get_player_stats`, `get_matchup_difficulty`, `search_recent_news`, `get_waiver_wire_available`, `get_draft_rankings`, `get_draft_projections`, `mark_player_drafted`, `mark_player_available`, `get_draft_board`, `get_start_sit_outlook`, `get_league_scoring_settings` |
 
 ### Remembering who's already drafted
 
@@ -49,6 +49,38 @@ a real Sleeper league excluded automatically without naming players one
 by one, pass that league's `league_id` into `get_draft_rankings` instead
 (or in addition) — it already cross-references who's actually rostered
 there, live, every time.
+
+### Draft projections that actually include rookies (optional)
+
+`get_draft_rankings` (above) is deliberately retrospective — it ranks
+players by what they actually did in a completed season, which means a
+rookie with zero prior NFL games structurally can't appear in it. For
+real forward-looking draft prep, there's a second tool,
+`get_draft_projections`, that pulls real expert-consensus **projections**
+for the upcoming season from [FantasyPros](https://www.fantasypros.com/api-data/)
+— includes rookies, and accounts for offseason trades, coaching changes,
+and depth-chart moves that pure past-production numbers can't see.
+
+This is optional and off by default: get a free FantasyPros API key
+(personal/non-commercial use tier, no card) and set it as an environment
+variable (`FANTASYPROS_API_KEY`) wherever the server is running. Without
+a key configured, `get_draft_projections` returns a clear "not
+configured" message and the skill falls back to `get_draft_rankings`
+instead of failing silently.
+
+Two things worth knowing if you're relying on this:
+- **FantasyPros' free tier caps each position at roughly 10 players per
+  request**, regardless of how many you ask for. Fine for early-round
+  draft prep, thin for late rounds or deep leagues. When this cap is hit,
+  the response includes a `shallow_pool_positions` /
+  `shallow_pool_note` field flagging exactly which positions were
+  affected, and cautions against comparing `value_over_replacement`
+  across positions when one position's pool is artificially shallow —
+  ranking within a position is still solid.
+- **`get_draft_rankings` and `get_draft_projections` answer different
+  questions** — actual past production vs. real forward projection —
+  and are meant to be used together, not as interchangeable versions of
+  the same thing.
 
 ### Facts, freshness, and confidence — not false certainty
 
@@ -220,41 +252,66 @@ Once installed, just ask naturally:
 Your Sleeper league ID (needed for waiver-wire questions) is in your
 league's URL on sleeper.com, e.g. `sleeper.com/leagues/<league_id>`.
 
-## Using it from your phone, without your laptop being on
+## Running it as an always-on remote service (Render + Upstash)
 
-The setup above runs locally — the server only exists while your machine
-does. If you want to reach it from anywhere, including your phone, via
-Claude's mobile app, see [`deploy/README.md`](deploy/README.md) for how
-to deploy your own always-on copy for free (Render + Upstash, no card
-required) and add it as a
-[custom connector](https://claude.com/docs/connectors/custom/remote-mcp).
-This is optional, separate from the plugin, and yours alone to run — if a
-friend wants the same, they deploy their own copy rather than sharing
-yours.
+The local install above is the simplest path — the server only exists
+while your own machine is running Claude. This repo also supports a
+second, fully self-hosted deployment mode: the exact same `servers/`
+code, run continuously as a small free web service, reachable from any
+device (including your phone, via Claude's mobile app) as a
+[custom MCP connector](https://claude.com/docs/connectors/custom/remote-mcp)
+— no laptop needing to stay open.
+
+This is the deployment I actually run day-to-day. It's built on two free
+tiers, deliberately paired for a real reason rather than picked
+arbitrarily: [Render](https://render.com) hosts the server itself, but
+its free tier's filesystem is **ephemeral** — anything written to local
+disk is wiped on every restart, which happens automatically after ~15
+minutes idle. Since the whole point of the draft board is that it
+persists ("don't suggest players I've already drafted"), that state is
+stored in [Upstash](https://upstash.com) Redis instead — also free, and
+unlike Render's disk, it survives restarts. `render.yaml` at the repo
+root defines the full deploy (build/start commands, Python version
+pin, and the optional `FANTASYPROS_API_KEY` / required
+`UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` env vars) as a
+Render Blueprint, so a fork deploys with no manual service configuration.
+
+Full walkthrough, including the auth option and the cold-start tradeoff,
+is in [`deploy/README.md`](deploy/README.md). This is optional and
+separate from the local plugin, and it's yours alone to run — if someone
+else wants the same, they deploy their own copy rather than sharing
+yours; nobody's hosting bill or inference cost is shared.
 
 ## Known limitations
 
-- **Draft rankings are retrospective, not projections — and never include
-  rookies.** `get_draft_rankings` ranks players by actual production in a
+- **`get_draft_rankings` is retrospective, not a projection, and never
+  includes rookies.** It ranks players by actual production in a
   completed season, adjusted for position scarcity. A rookie has no prior
-  NFL season, so they structurally can't appear here, not as a bug but as
-  a direct consequence of how the ranking works. The skill is instructed
-  to say this plainly rather than silently omitting rookies, and to offer
-  `search_recent_news` for rookie context instead. Verified directly
-  against the current rookie class (2026 draft): 290 rookies are already
-  resolvable by name via `get_player_stats` / `get_start_sit_outlook` —
-  roster and ID data updates well ahead of game data — but none appear in
-  draft rankings until they've actually played, and about a third don't
-  yet have a Sleeper ID mapped, so very recent additions may not show up
-  in `get_waiver_wire_available` right away either.
+  NFL season, so they structurally can't appear here — not a bug, a
+  direct consequence of how the ranking works. (Real forward-looking
+  projections that *do* include rookies are available via the optional
+  `get_draft_projections` tool — see "Draft projections that actually
+  include rookies" above.) The skill still says this plainly for
+  `get_draft_rankings` specifically, and offers `search_recent_news` for
+  rookie context. Verified directly against the current rookie class
+  (2026 draft): 290 rookies are already resolvable by name via
+  `get_player_stats` / `get_start_sit_outlook` — roster and ID data
+  updates well ahead of game data — but none appear in
+  `get_draft_rankings` until they've actually played, and about a third
+  don't yet have a Sleeper ID mapped, so very recent additions may not
+  show up in `get_waiver_wire_available` right away either.
 - **News search covers ESPN's general NFL feed**, not every beat writer or
   team-specific source. No results doesn't necessarily mean no news exists.
 - **Waiver-wire tool currently supports Sleeper only** (not ESPN/Yahoo leagues).
-- **No paid data providers (e.g. SportsDataIO) are used, on purpose.** They'd
-  mainly add numeric projections (deliberately out of scope — see "Forming
-  an opinion, not just reporting stats" above) or broader real-time news,
-  at a real recurring cost that conflicts with this plugin's zero-spend
-  design. One thing they'd offer that's worth knowing about instead: Vegas
+- **No paid data providers (e.g. SportsDataIO) are used, on purpose.**
+  Evaluated directly against this project's zero-recurring-cost design:
+  their free tiers cap out at last season's data, and current-season/
+  injury/fantasy-specific feeds require a paid subscription. The one
+  thing they'd add that's genuinely useful — numeric projections — is
+  already covered for free via the optional FantasyPros integration
+  above (with its own free-tier player-count cap, noted there). What
+  they'd still add beyond that is broader real-time news aggregation past
+  ESPN's general feed, and (mostly redundant with FantasyPros) Vegas
   spread/total lines for implied team scoring — nflverse's free schedule
   data already includes these (verified: populated for the full current
   season, including games not yet played), just not wired into a tool yet.
