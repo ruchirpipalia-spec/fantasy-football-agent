@@ -1,0 +1,10 @@
+{
+  "name": "fantasy-football-agent",
+  "version": "0.11.0",
+  "description": "PPR fantasy football assistant: live stats, matchup difficulty, injury status, recent news, waiver-wire trends, draft rankings from actual production, and (with an optional free FantasyPros key) forward-looking draft projections that include rookies. Fetches live from free sources (nflverse, Sleeper, public RSS) — no hosted backend, no account required. Optional free remote-deploy path for phone access — see deploy/README.md.",
+  "author": {
+    "name": "Ruchir"
+  },
+  "license": "MIT",
+  "keywords": ["fantasy-football", "nfl", "ppr", "sports", "sleeper"]
+}
